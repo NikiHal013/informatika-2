@@ -21,20 +21,36 @@ class GameApp:
         self.player_name = ""
         self.input_text = ""
         
-        # Synchronizovaná data
+        # State Data
         self.player_count = 0
         self.players = {}
-        self.targets = []
-        self.static_points = []
         self.time_left = 0
         self.lvl_type = ""
         self.end_msg = ""
         
-        # Kvízová data
+        # Titulek a popis pro zobrazení na obrazovkách
+        self.title = ""
+        self.description = ""
+        
+        # Level Static Cache (Updated only on start_level)
+        self.walls = []
+        self.grid_size = 20
+        self.switches = []
+        self.static_points = []
+        self.targets = []
+        self.target_pos = None
+        self.code_template = ""
+        
+        # Dynamic Level State
+        self.active_switches = []
+        self.gate_open = False
         self.question = None
         self.score = 0
         self.votes = 0
-        self.my_vote = None # Index naší vybrané odpovědi
+        self.my_vote = None
+        self.my_code = ""
+        self.my_results = None
+        self.solved_by = []
 
         self.screens = {
             "INPUT_IP": InputScreen(self, "IP", "INPUT_NAME"),
@@ -59,23 +75,67 @@ class GameApp:
 
     def on_message(self, msg):
         m_type = msg.get("type")
+        
         if m_type == "lobby_sync":
             self.player_count = msg["count"]
+            
         elif m_type == "start_level":
             self.state = "GAME"
+            self.lvl_type = msg.get("lvl_type", "")
+            self.title = msg.get("title", "Vánoční výzva")
+            self.description = msg.get("description", "")
             self.end_msg = ""
             self.my_vote = None
-        elif m_type == "sync":
-            self.lvl_type = msg["lvl_type"]
-            self.time_left = msg["time_left"]
-            self.players = msg["players"]
+            self.my_results = None
+            
+            # Cache static data
+            self.walls = msg.get("walls", [])
+            self.grid_size = msg.get("grid_size", 20)
+            self.switches = msg.get("switches", [])
+            self.target_pos = msg.get("target_pos")
             self.static_points = msg.get("static_points", [])
-            new_q = msg.get("question")
-            if self.question != new_q:
-                self.my_vote = None
-                self.question = new_q
-            self.score = msg.get("score", 0)
-            self.votes = msg.get("votes", 0)
+            self.targets = msg.get("targets", [])
+            self.code_template = msg.get("template", "")
+            if not self.my_code or self.lvl_type == "CODING":
+                self.my_code = self.code_template
+
+        elif m_type == "sync":
+            self.time_left = msg.get("time_left", 0)
+            self.players = msg.get("players", {})
+            
+            # Sync dynamic parts only
+            if self.lvl_type == "QUIZ":
+                new_q_data = msg.get("question")
+                new_votes_count = msg.get("votes", 0)
+                
+                is_new_round = False
+                if new_q_data:
+                    if not self.question:
+                        is_new_round = True
+                    # V levels.json je text otázky pod klíčem 'q'
+                    elif self.question.get("q") != new_q_data.get("q"):
+                        is_new_round = True
+                    elif new_votes_count == 0 and self.votes > 0:
+                        # Server právě vyhodnotil a vyčistil hlasy
+                        is_new_round = True
+
+                if is_new_round:
+                    self.my_vote = None
+                    self.question = new_q_data
+
+                if is_new_round:
+                    self.my_vote = None
+                    self.question = new_q_data
+                
+                self.score = msg.get("score", 0)
+                self.votes = new_votes_count
+            elif self.lvl_type == "MAZE":
+                self.active_switches = msg.get("active_switches", [])
+                self.gate_open = msg.get("gate_open", False)
+            elif self.lvl_type == "CODING":
+                self.my_results = msg.get("my_results")
+                self.solved_by = msg.get("solved_by", [])
+
         elif m_type in ["victory", "game_over"]:
             self.state = "END"
             self.end_msg = msg.get("msg", "Konec hry")
